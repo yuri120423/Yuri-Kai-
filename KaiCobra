@@ -1,4 +1,4 @@
---[[ YURI KAI HUB (Delta) - Funcao 1: Hitbox ]]
+--[[ YURI KAI HUB (Delta) - Hitbox + Invisivel + animacoes ]]
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
@@ -26,6 +26,8 @@ local CONFIG = {
     PartTransparency    = 0.7,
     RequireCombatClient = false, -- true = so aplica se PlayerGui.CombatClient existir
     IgnoreTeam          = false,
+    InvisFadeTime       = 0.5,
+    GhostAlpha          = 0.6,   -- o quanto voce se ve transparente (0 a 1)
     ToggleKey           = Enum.KeyCode.RightShift,
 }
 
@@ -75,6 +77,21 @@ end
 local function hover(btn, normal, over)
     bind(btn.MouseEnter, function() tween(btn, 0.15, { BackgroundColor3 = over }) end)
     bind(btn.MouseLeave, function() tween(btn, 0.15, { BackgroundColor3 = normal }) end)
+end
+
+-- botao que "afunda" ao tocar e volta com mola
+local function pressable(btn, amount)
+    local s = btn:FindFirstChildOfClass("UIScale") or new("UIScale", { Scale = 1 }, btn)
+    bind(btn.MouseButton1Down, function()
+        tween(s, 0.1, { Scale = amount or 0.93 })
+    end)
+    bind(btn.MouseButton1Up, function()
+        tween(s, 0.4, { Scale = 1 }, Enum.EasingStyle.Back)
+    end)
+    bind(btn.MouseLeave, function()
+        tween(s, 0.3, { Scale = 1 }, Enum.EasingStyle.Back)
+    end)
+    return s
 end
 
 local function isPress(i)
@@ -163,6 +180,146 @@ local function inspectCombatClient()
     notify("Lista do CombatClient impressa no console")
 end
 
+---------------- INVISIVEL ----------------
+-- Parte 1: voce se ve transparente (indicador, so na sua tela)
+-- Parte 2: truque do assento que tenta esconder seu personagem dos outros
+local Invis = { Enabled = false }
+local fade = Instance.new("NumberValue")
+local invisOriginal = setmetatable({}, { __mode = "k" })
+local fadeTween
+local ghostSeat
+local ghostToken = 0
+local GHOST_POS = Vector3.new(-25.95, 84, 3537.55) -- ponto distante usado no truque
+
+local function applyInvis()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local f = fade.Value
+    for _, d in ipairs(char:GetDescendants()) do
+        if (d:IsA("BasePart") or d:IsA("Decal")) and d.Name ~= "HumanoidRootPart" then
+            local o = invisOriginal[d]
+            if o == nil then
+                o = d.Transparency
+                invisOriginal[d] = o
+            end
+            d.Transparency = o + (1 - o) * f
+        end
+    end
+end
+
+local function clearInvis()
+    fade.Value = 0
+    applyInvis()
+    for k in pairs(invisOriginal) do
+        invisOriginal[k] = nil
+    end
+end
+
+bind(RunService.Heartbeat, function()
+    if Invis.Enabled or fade.Value > 0 then
+        applyInvis()
+    end
+end)
+
+local function getCharParts()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local torso = char and (char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
+    return char, hrp, torso
+end
+
+local function dropSeat()
+    if ghostSeat then
+        pcall(function() ghostSeat:Destroy() end)
+        ghostSeat = nil
+    end
+end
+
+local function goGhost(token)
+    local char, hrp, torso = getCharParts()
+    if not (char and hrp and torso) then
+        notify("Personagem nao encontrado")
+        return
+    end
+
+    local saved = hrp.CFrame
+    char:MoveTo(GHOST_POS)
+    task.wait(0.15)
+
+    -- se desligou no meio do caminho, volta pro lugar
+    if token ~= ghostToken or not Invis.Enabled then
+        hrp.CFrame = saved
+        return
+    end
+
+    local seat = Instance.new("Seat")
+    seat.Name = "YuriKaiSeat"
+    seat.Anchored = false
+    seat.CanCollide = false
+    seat.Transparency = 1
+    seat.Position = GHOST_POS
+    seat.Parent = workspace
+
+    local weld = Instance.new("Weld")
+    weld.Part0 = seat
+    weld.Part1 = torso
+    weld.Parent = seat
+
+    task.wait()
+    seat.CFrame = saved
+    ghostSeat = seat
+end
+
+local function leaveGhost()
+    local _, hrp = getCharParts()
+    dropSeat()
+    if hrp then
+        task.wait(0.1)
+        hrp.CFrame = hrp.CFrame + Vector3.new(0, 1, 0)
+    end
+end
+
+-- ao renascer, reativa sozinho
+bind(LocalPlayer.CharacterAdded, function()
+    dropSeat()
+    if Invis.Enabled then
+        ghostToken = ghostToken + 1
+        local token = ghostToken
+        task.delay(1.5, function()
+            if Invis.Enabled and token == ghostToken then
+                goGhost(token)
+            end
+        end)
+    end
+end)
+
+local function setInvisible(state)
+    Invis.Enabled = state
+    ghostToken = ghostToken + 1
+    local token = ghostToken
+
+    if fadeTween then fadeTween:Cancel() end
+    fadeTween = TweenService:Create(
+        fade,
+        TweenInfo.new(CONFIG.InvisFadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut),
+        { Value = state and CONFIG.GhostAlpha or 0 }
+    )
+    fadeTween.Completed:Connect(function(playbackState)
+        if playbackState == Enum.PlaybackState.Completed and not Invis.Enabled then
+            clearInvis()
+        end
+    end)
+    fadeTween:Play()
+
+    task.spawn(function()
+        if state then
+            goGhost(token)
+        else
+            leaveGhost()
+        end
+    end)
+end
+
 ---------------- INTERFACE ----------------
 local gui = new("ScreenGui", {
     Name = "YuriKaiHub",
@@ -197,12 +354,14 @@ ENV.YuriKaiGui = gui
 
 local cam = workspace.CurrentCamera
 local vp = cam and cam.ViewportSize or Vector2.new(800, 400)
-local FULL = UDim2.fromOffset(math.min(480, vp.X - 40), math.min(300, vp.Y - 40))
+local FULL = UDim2.fromOffset(math.min(480, vp.X - 40), math.min(310, vp.Y - 30))
+local FAB_CENTER = UDim2.new(0, 36, 0.5, 0)
+local lastPos = UDim2.fromScale(0.5, 0.5)
 
 local main = new("Frame", {
     Name = "Main",
     AnchorPoint = Vector2.new(0.5, 0.5),
-    Position = UDim2.fromScale(0.5, 0.5),
+    Position = lastPos,
     Size = UDim2.fromOffset(0, 0),
     BackgroundColor3 = C.BG,
     BorderSizePixel = 0,
@@ -263,6 +422,7 @@ local function headerButton(text, x)
         Size = UDim2.fromOffset(28, 28),
     }, top)
     corner(b, 8)
+    pressable(b, 0.85)
     return b
 end
 
@@ -330,12 +490,16 @@ local tabs = {}
 local function selectTab(tab)
     for _, t in ipairs(tabs) do
         local active = (t == tab)
+        if active and not t.Page.Visible then
+            t.Page.Position = UDim2.fromOffset(24, 0)
+            tween(t.Page, 0.45, { Position = UDim2.fromOffset(0, 0) })
+        end
         t.Page.Visible = active
         tween(t.Button, 0.25, {
             BackgroundTransparency = active and 0 or 1,
             TextColor3 = active and C.Text or C.Muted,
         })
-        tween(t.Bar, 0.25, { Size = UDim2.fromOffset(3, active and 18 or 0) })
+        tween(t.Bar, 0.35, { Size = UDim2.fromOffset(3, active and 18 or 0) }, Enum.EasingStyle.Back)
     end
 end
 
@@ -352,6 +516,7 @@ local function addTab(name)
         LayoutOrder = #tabs + 1,
     }, side)
     corner(btn, 8)
+    local scale = pressable(btn, 0.95)
 
     local bar = new("Frame", {
         Size = UDim2.fromOffset(3, 0),
@@ -380,73 +545,110 @@ local function addTab(name)
         PaddingBottom = UDim.new(0, 12),
     }, page)
 
-    local tab = { Button = btn, Bar = bar, Page = page }
+    local tab = { Button = btn, Bar = bar, Page = page, Scale = scale }
     table.insert(tabs, tab)
     bind(btn.MouseButton1Click, function() selectTab(tab) end)
     return page, tab
 end
 
----------------- ABA: HITBOX ----------------
-local hitboxPage, hitboxTab = addTab("Hitbox")
+-- Card generico (wrap segue o layout, card desliza dentro dele)
+local function makeCard(page, order, height)
+    local wrap = new("Frame", {
+        Size = UDim2.new(1, 0, 0, height),
+        BackgroundTransparency = 1,
+        LayoutOrder = order,
+    }, page)
+    local card = new("Frame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundColor3 = C.Card,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+    }, wrap)
+    corner(card, 10)
+    local cardStroke = new("UIStroke", { Color = C.Accent, Thickness = 1.3, Transparency = 1 }, card)
+    return wrap, card, cardStroke
+end
 
+-- Botao liga/desliga com bolinha que estica
+local function makeSwitch(card, cardStroke, onChange)
+    local sw = new("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        BackgroundColor3 = C.Off,
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, -14, 0, 19),
+        Size = UDim2.fromOffset(46, 24),
+    }, card)
+    corner(sw, 12)
+
+    local knob = new("Frame", {
+        Size = UDim2.fromOffset(18, 18),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0, 12, 0.5, 0),
+        BackgroundColor3 = Color3.new(1, 1, 1),
+        BorderSizePixel = 0,
+    }, sw)
+    corner(knob, 9)
+    pressable(sw, 0.9)
+
+    local state = false
+    local function set(s)
+        state = s
+        tween(sw, 0.3, { BackgroundColor3 = s and C.Accent or C.Off })
+        tween(cardStroke, 0.3, { Transparency = s and 0.35 or 1 })
+        tween(knob, 0.4, {
+            Position = s and UDim2.new(1, -12, 0.5, 0) or UDim2.new(0, 12, 0.5, 0),
+        }, Enum.EasingStyle.Back)
+        tween(knob, 0.12, { Size = UDim2.fromOffset(26, 18) })
+        task.delay(0.12, function()
+            if knob.Parent then
+                tween(knob, 0.3, { Size = UDim2.fromOffset(18, 18) }, Enum.EasingStyle.Back)
+            end
+        end)
+        onChange(s)
+    end
+
+    bind(sw.MouseButton1Click, function() set(not state) end)
+    return sw, set
+end
+
+local function cardTexts(card, titleText, subText)
+    new("TextLabel", {
+        Text = titleText,
+        Font = Enum.Font.GothamBold,
+        TextSize = 15,
+        TextColor3 = C.Text,
+        BackgroundTransparency = 1,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.fromOffset(14, 10),
+        Size = UDim2.new(1, -90, 0, 20),
+    }, card)
+    new("TextLabel", {
+        Text = subText,
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        TextColor3 = C.Muted,
+        BackgroundTransparency = 1,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.fromOffset(14, 32),
+        Size = UDim2.new(1, -90, 0, 18),
+    }, card)
+end
+
+---------------- ABA: FUNCOES ----------------
+local hubPage, hubTab = addTab("Hitbox")
+
+-- ===== 1) HITBOX =====
 local COLLAPSED, EXPANDED = 62, 156
 
-local card = new("Frame", {
-    Size = UDim2.new(1, 0, 0, COLLAPSED),
-    BackgroundColor3 = C.Card,
-    BorderSizePixel = 0,
-    ClipsDescendants = true,
-}, hitboxPage)
-corner(card, 10)
+local hWrap, hCard, hStroke = makeCard(hubPage, 1, COLLAPSED)
+cardTexts(hCard, "Hitbox", "Aumenta a hitbox dos inimigos")
 
-new("TextLabel", {
-    Text = "Hitbox",
-    Font = Enum.Font.GothamBold,
-    TextSize = 15,
-    TextColor3 = C.Text,
-    BackgroundTransparency = 1,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(14, 10),
-    Size = UDim2.new(1, -90, 0, 20),
-}, card)
-
-new("TextLabel", {
-    Text = "Aumenta a hitbox dos inimigos",
-    Font = Enum.Font.Gotham,
-    TextSize = 12,
-    TextColor3 = C.Muted,
-    BackgroundTransparency = 1,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    Position = UDim2.fromOffset(14, 32),
-    Size = UDim2.new(1, -90, 0, 18),
-}, card)
-
--- Botao ativar
-local switch = new("TextButton", {
-    Text = "",
-    AutoButtonColor = false,
-    BackgroundColor3 = C.Off,
-    AnchorPoint = Vector2.new(1, 0),
-    Position = UDim2.new(1, -14, 0, 19),
-    Size = UDim2.fromOffset(46, 24),
-}, card)
-corner(switch, 12)
-
-local knob = new("Frame", {
-    Size = UDim2.fromOffset(18, 18),
-    AnchorPoint = Vector2.new(0, 0.5),
-    Position = UDim2.new(0, 3, 0.5, 0),
-    BackgroundColor3 = Color3.new(1, 1, 1),
-    BorderSizePixel = 0,
-}, switch)
-corner(knob, 9)
-
--- Area do slider (aparece ao ativar)
 local sliderArea = new("Frame", {
-    Position = UDim2.fromOffset(0, COLLAPSED),
+    Position = UDim2.fromOffset(0, COLLAPSED + 14),
     Size = UDim2.new(1, 0, 0, EXPANDED - COLLAPSED),
     BackgroundTransparency = 1,
-}, card)
+}, hCard)
 
 new("TextLabel", {
     Text = "Alcance da hitbox",
@@ -540,6 +742,7 @@ local inspectBtn = new("TextButton", {
 }, sliderArea)
 corner(inspectBtn, 6)
 hover(inspectBtn, C.Off, C.Accent)
+pressable(inspectBtn, 0.92)
 bind(inspectBtn.MouseButton1Click, inspectCombatClient)
 
 -- Slider (mouse e toque)
@@ -550,8 +753,8 @@ local function setValue(v)
     Hitbox.Value = v
     valueLabel.Text = tostring(v)
     local a = v / 100
-    tween(fill, 0.12, { Size = UDim2.fromScale(a, 1) })
-    tween(sKnob, 0.12, { Position = UDim2.fromScale(a, 0.5) })
+    tween(fill, 0.1, { Size = UDim2.fromScale(a, 1) })
+    tween(sKnob, 0.1, { Position = UDim2.fromScale(a, 0.5) })
     if v == 0 then restoreAll() end
 end
 
@@ -564,7 +767,7 @@ bind(hit.InputBegan, function(input)
     if isPress(input) then
         draggingSlider = true
         fromInput(input)
-        tween(sKnob, 0.15, { Size = UDim2.fromOffset(23, 23) }, Enum.EasingStyle.Back)
+        tween(sKnob, 0.2, { Size = UDim2.fromOffset(24, 24) }, Enum.EasingStyle.Back)
     end
 end)
 bind(UserInputService.InputChanged, function(input)
@@ -575,23 +778,17 @@ end)
 bind(UserInputService.InputEnded, function(input)
     if isPress(input) and draggingSlider then
         draggingSlider = false
-        tween(sKnob, 0.15, { Size = UDim2.fromOffset(18, 18) })
+        tween(sKnob, 0.3, { Size = UDim2.fromOffset(18, 18) }, Enum.EasingStyle.Back)
     end
 end)
 
--- Ativar / desativar
-local function setEnabled(state)
+makeSwitch(hCard, hStroke, function(state)
     Hitbox.Enabled = state
-    tween(switch, 0.25, { BackgroundColor3 = state and C.Accent or C.Off })
-    tween(knob, 0.3, {
-        Position = state and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
-    }, Enum.EasingStyle.Back)
-    tween(card, 0.45, { Size = UDim2.new(1, 0, 0, state and EXPANDED or COLLAPSED) })
+    tween(hWrap, 0.5, { Size = UDim2.new(1, 0, 0, state and EXPANDED or COLLAPSED) })
+    tween(sliderArea, state and 0.6 or 0.3, {
+        Position = UDim2.fromOffset(0, state and COLLAPSED or COLLAPSED + 14),
+    })
     if not state then restoreAll() end
-end
-
-bind(switch.MouseButton1Click, function()
-    setEnabled(not Hitbox.Enabled)
 end)
 
 -- Status do CombatClient
@@ -604,7 +801,14 @@ task.spawn(function()
     end
 end)
 
----------------- ABRIR / FECHAR ----------------
+-- ===== 2) INVISIVEL =====
+local iWrap, iCard, iStroke = makeCard(hubPage, 2, COLLAPSED)
+cardTexts(iCard, "Invisivel", "Esconde voce dos outros (beta)")
+makeSwitch(iCard, iStroke, function(state)
+    setInvisible(state)
+end)
+
+---------------- ABRIR / MINIMIZAR / FECHAR ----------------
 local fab = new("TextButton", {
     Text = "YK",
     Font = Enum.Font.GothamBlack,
@@ -618,28 +822,74 @@ local fab = new("TextButton", {
     Visible = false,
 }, gui)
 corner(fab, 22)
-new("UIStroke", { Color = C.Accent2, Thickness = 1.5 }, fab)
+pressable(fab, 0.85)
+
+local fabStroke = new("UIStroke", { Color = C.Accent2, Thickness = 1.5 }, fab)
+TweenService:Create(
+    fabStroke,
+    TweenInfo.new(1, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+    { Thickness = 4, Transparency = 0.5 }
+):Play()
 
 local isOpen = false
+local minimized = false
+
+-- entrada em cascata dos itens
+local introCards = { hCard, iCard }
+
+local function playIntro()
+    for i, card in ipairs(introCards) do
+        card.Position = UDim2.new(0, -40, 0, 0)
+        task.delay(0.2 + (i - 1) * 0.09, function()
+            if card.Parent then
+                tween(card, 0.6, { Position = UDim2.new(0, 0, 0, 0) }, Enum.EasingStyle.Back)
+            end
+        end)
+    end
+    for i, t in ipairs(tabs) do
+        t.Scale.Scale = 0
+        task.delay(0.15 + (i - 1) * 0.08, function()
+            if t.Button.Parent then
+                tween(t.Scale, 0.55, { Scale = 1 }, Enum.EasingStyle.Back)
+            end
+        end)
+    end
+end
 
 local function openWindow()
     if isOpen then return end
     isOpen = true
     main.Visible = true
+    if minimized then main.Position = FAB_CENTER end
+    minimized = false
+
     local t1 = tween(fab, 0.2, { Size = UDim2.fromOffset(0, 0) })
     t1.Completed:Connect(function()
         if isOpen then fab.Visible = false end
     end)
-    tween(main, 0.55, { Size = FULL }, Enum.EasingStyle.Back)
+
+    tween(main, 0.65, { Size = FULL, Position = lastPos }, Enum.EasingStyle.Back)
+    playIntro()
 end
 
 local function closeWindow()
     if not isOpen then return end
     isOpen = false
+    minimized = true
+    lastPos = main.Position
+
     fab.Visible = true
-    tween(fab, 0.4, { Size = UDim2.fromOffset(44, 44) }, Enum.EasingStyle.Back)
-    local t2 = tween(main, 0.3, { Size = UDim2.fromOffset(0, 0) },
-        Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+    fab.Size = UDim2.fromOffset(0, 0)
+    task.delay(0.2, function()
+        if not isOpen and fab.Parent then
+            tween(fab, 0.55, { Size = UDim2.fromOffset(44, 44) }, Enum.EasingStyle.Back)
+        end
+    end)
+
+    local t2 = tween(main, 0.4, {
+        Size = UDim2.fromOffset(0, 0),
+        Position = FAB_CENTER,
+    }, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
     t2.Completed:Connect(function()
         if not isOpen then main.Visible = false end
     end)
@@ -659,24 +909,30 @@ end)
 local function cleanup()
     Hitbox.Enabled = false
     restoreAll()
+    Invis.Enabled = false
+    ghostToken = ghostToken + 1
+    dropSeat()
+    pcall(clearInvis)
     for _, c in ipairs(connections) do
         pcall(function() c:Disconnect() end)
     end
     if gui then gui:Destroy() end
+    fade:Destroy()
 end
 ENV.YuriKaiCleanup = cleanup
 
 bind(btnClose.MouseButton1Click, function()
     Hitbox.Enabled = false
     restoreAll()
+    Invis.Enabled = false
     isOpen = false
-    local t3 = tween(main, 0.3, { Size = UDim2.fromOffset(0, 0) },
+    local t3 = tween(main, 0.35, { Size = UDim2.fromOffset(0, 0) },
         Enum.EasingStyle.Back, Enum.EasingDirection.In)
     t3.Completed:Connect(cleanup)
 end)
 
 ---------------- START ----------------
-selectTab(hitboxTab)
+selectTab(hubTab)
 openWindow()
 notify("Hub carregado!")
 
