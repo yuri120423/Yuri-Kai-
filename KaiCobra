@@ -1,0 +1,688 @@
+--[[ YURI KAI HUB (Delta) - Funcao 1: Hitbox ]]
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local StarterGui       = game:GetService("StarterGui")
+
+local LocalPlayer = Players.LocalPlayer
+local ENV = (getgenv and getgenv()) or _G
+
+local function notify(text)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = "Yuri Kai", Text = text, Duration = 6,
+        })
+    end)
+end
+
+local ok, err = pcall(function()
+
+if ENV.YuriKaiCleanup then pcall(ENV.YuriKaiCleanup) end
+
+local CONFIG = {
+    MaxExtra            = 60,    -- studs extras quando a barra esta em 100
+    PartTransparency    = 0.7,
+    RequireCombatClient = false, -- true = so aplica se PlayerGui.CombatClient existir
+    IgnoreTeam          = false,
+    ToggleKey           = Enum.KeyCode.RightShift,
+}
+
+local C = {
+    BG      = Color3.fromRGB(16, 16, 24),
+    Panel   = Color3.fromRGB(24, 24, 36),
+    Card    = Color3.fromRGB(30, 30, 46),
+    Accent  = Color3.fromRGB(139, 92, 246),
+    Accent2 = Color3.fromRGB(236, 72, 153),
+    Text    = Color3.fromRGB(240, 240, 250),
+    Muted   = Color3.fromRGB(150, 150, 175),
+    Off     = Color3.fromRGB(55, 55, 75),
+    Good    = Color3.fromRGB(74, 222, 128),
+    Bad     = Color3.fromRGB(248, 113, 113),
+}
+
+---------------- HELPERS ----------------
+local connections = {}
+
+local function bind(signal, fn)
+    local c = signal:Connect(fn)
+    connections[#connections + 1] = c
+    return c
+end
+
+local function new(class, props, parent)
+    local obj = Instance.new(class)
+    for k, v in pairs(props) do obj[k] = v end
+    obj.Parent = parent
+    return obj
+end
+
+local function corner(obj, r)
+    return new("UICorner", { CornerRadius = UDim.new(0, r) }, obj)
+end
+
+local function tween(obj, time, goal, style, dir)
+    local t = TweenService:Create(
+        obj,
+        TweenInfo.new(time, style or Enum.EasingStyle.Quint, dir or Enum.EasingDirection.Out),
+        goal
+    )
+    t:Play()
+    return t
+end
+
+local function hover(btn, normal, over)
+    bind(btn.MouseEnter, function() tween(btn, 0.15, { BackgroundColor3 = over }) end)
+    bind(btn.MouseLeave, function() tween(btn, 0.15, { BackgroundColor3 = normal }) end)
+end
+
+local function isPress(i)
+    return i.UserInputType == Enum.UserInputType.MouseButton1
+        or i.UserInputType == Enum.UserInputType.Touch
+end
+
+local function isMove(i)
+    return i.UserInputType == Enum.UserInputType.MouseMovement
+        or i.UserInputType == Enum.UserInputType.Touch
+end
+
+---------------- HITBOX ----------------
+local Hitbox = { Enabled = false, Value = 0 }
+local original = setmetatable({}, { __mode = "k" })
+
+local function getCombatClient()
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    return pg and pg:FindFirstChild("CombatClient")
+end
+
+local function restoreAll()
+    for part, data in pairs(original) do
+        if part.Parent then
+            part.Size = data.Size
+            part.Transparency = data.Transparency
+            part.CanCollide = data.CanCollide
+        end
+        original[part] = nil
+    end
+end
+
+local function applyHitbox()
+    if CONFIG.RequireCombatClient and not getCombatClient() then
+        restoreAll()
+        return
+    end
+
+    local extra = Hitbox.Value * CONFIG.MaxExtra / 100
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        local skip = (plr == LocalPlayer)
+        if CONFIG.IgnoreTeam and LocalPlayer.Team and plr.Team == LocalPlayer.Team then
+            skip = true
+        end
+
+        if not skip then
+            local char = plr.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+
+            if hrp and hum and hum.Health > 0 then
+                if not original[hrp] then
+                    original[hrp] = {
+                        Size = hrp.Size,
+                        Transparency = hrp.Transparency,
+                        CanCollide = hrp.CanCollide,
+                    }
+                end
+                local base = original[hrp].Size
+                hrp.Size = Vector3.new(base.X + extra, base.Y + extra, base.Z + extra)
+                hrp.Transparency = CONFIG.PartTransparency
+                hrp.CanCollide = false
+            end
+        end
+    end
+end
+
+bind(RunService.Heartbeat, function()
+    if Hitbox.Enabled and Hitbox.Value > 0 then
+        applyHitbox()
+    end
+end)
+
+local function inspectCombatClient()
+    local cc = getCombatClient()
+    if not cc then
+        warn("[Yuri Kai] CombatClient nao encontrado em PlayerGui")
+        notify("CombatClient nao encontrado")
+        return
+    end
+    print(("[Yuri Kai] %s (%s)"):format(cc:GetFullName(), cc.ClassName))
+    for _, d in ipairs(cc:GetDescendants()) do
+        print(("  - %s [%s]"):format(d:GetFullName(), d.ClassName))
+    end
+    notify("Lista do CombatClient impressa no console")
+end
+
+---------------- INTERFACE ----------------
+local gui = new("ScreenGui", {
+    Name = "YuriKaiHub",
+    ResetOnSpawn = false,
+    IgnoreGuiInset = true,
+    DisplayOrder = 999,
+    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+})
+
+if syn and syn.protect_gui then pcall(syn.protect_gui, gui) end
+
+local function mount()
+    local getters = {
+        function() return gethui and gethui() end,
+        function() return game:GetService("CoreGui") end,
+        function() return LocalPlayer:WaitForChild("PlayerGui") end,
+    }
+    for _, get in ipairs(getters) do
+        local okGet, container = pcall(get)
+        if okGet and container then
+            local okSet = pcall(function() gui.Parent = container end)
+            if okSet and gui.Parent == container then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+if not mount() then error("nao consegui criar a interface") end
+ENV.YuriKaiGui = gui
+
+local cam = workspace.CurrentCamera
+local vp = cam and cam.ViewportSize or Vector2.new(800, 400)
+local FULL = UDim2.fromOffset(math.min(480, vp.X - 40), math.min(300, vp.Y - 40))
+
+local main = new("Frame", {
+    Name = "Main",
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0.5, 0.5),
+    Size = UDim2.fromOffset(0, 0),
+    BackgroundColor3 = C.BG,
+    BorderSizePixel = 0,
+    ClipsDescendants = true,
+    Active = true,
+    Visible = false,
+}, gui)
+corner(main, 12)
+
+local stroke = new("UIStroke", { Color = C.Accent, Thickness = 1.5, Transparency = 0.2 }, main)
+TweenService:Create(
+    stroke,
+    TweenInfo.new(1.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+    { Transparency = 0.75 }
+):Play()
+
+-- Topbar
+local top = new("Frame", {
+    Size = UDim2.new(1, 0, 0, 42),
+    BackgroundColor3 = C.Panel,
+    BorderSizePixel = 0,
+}, main)
+
+local title = new("TextLabel", {
+    BackgroundTransparency = 1,
+    Position = UDim2.fromOffset(16, 0),
+    Size = UDim2.new(0, 200, 1, 0),
+    Font = Enum.Font.GothamBlack,
+    Text = "YURI KAI",
+    TextSize = 20,
+    TextColor3 = Color3.new(1, 1, 1),
+    TextXAlignment = Enum.TextXAlignment.Left,
+}, top)
+
+local grad = new("UIGradient", {
+    Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, C.Accent),
+        ColorSequenceKeypoint.new(0.5, C.Accent2),
+        ColorSequenceKeypoint.new(1, C.Accent),
+    }),
+}, title)
+TweenService:Create(
+    grad,
+    TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1),
+    { Rotation = 360 }
+):Play()
+
+local function headerButton(text, x)
+    local b = new("TextButton", {
+        Text = text,
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        TextColor3 = C.Text,
+        BackgroundColor3 = C.Card,
+        AutoButtonColor = false,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, x, 0.5, 0),
+        Size = UDim2.fromOffset(28, 28),
+    }, top)
+    corner(b, 8)
+    return b
+end
+
+local btnClose = headerButton("X", -10)
+local btnMin = headerButton("-", -44)
+hover(btnClose, C.Card, C.Bad)
+hover(btnMin, C.Card, C.Off)
+
+-- Arrastar a janela
+do
+    local dragging, dragStart, startPos
+    bind(top.InputBegan, function(input)
+        if isPress(input) then
+            dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+        end
+    end)
+    bind(UserInputService.InputChanged, function(input)
+        if dragging and isMove(input) then
+            local d = input.Position - dragStart
+            main.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + d.X,
+                startPos.Y.Scale, startPos.Y.Offset + d.Y
+            )
+        end
+    end)
+    bind(UserInputService.InputEnded, function(input)
+        if isPress(input) then dragging = false end
+    end)
+end
+
+-- Sidebar e conteudo
+local side = new("Frame", {
+    Position = UDim2.fromOffset(0, 42),
+    Size = UDim2.new(0, 110, 1, -42),
+    BackgroundColor3 = C.Panel,
+    BorderSizePixel = 0,
+}, main)
+new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, side)
+new("UIPadding", {
+    PaddingTop = UDim.new(0, 10),
+    PaddingLeft = UDim.new(0, 8),
+    PaddingRight = UDim.new(0, 8),
+}, side)
+
+new("TextLabel", {
+    Text = "mais funcoes\nem breve...",
+    Font = Enum.Font.Gotham,
+    TextSize = 11,
+    TextColor3 = C.Muted,
+    BackgroundTransparency = 1,
+    Size = UDim2.new(1, 0, 0, 30),
+    LayoutOrder = 99,
+}, side)
+
+local content = new("Frame", {
+    Position = UDim2.fromOffset(110, 42),
+    Size = UDim2.new(1, -110, 1, -42),
+    BackgroundTransparency = 1,
+}, main)
+
+local tabs = {}
+
+local function selectTab(tab)
+    for _, t in ipairs(tabs) do
+        local active = (t == tab)
+        t.Page.Visible = active
+        tween(t.Button, 0.25, {
+            BackgroundTransparency = active and 0 or 1,
+            TextColor3 = active and C.Text or C.Muted,
+        })
+        tween(t.Bar, 0.25, { Size = UDim2.fromOffset(3, active and 18 or 0) })
+    end
+end
+
+local function addTab(name)
+    local btn = new("TextButton", {
+        Text = name,
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+        TextColor3 = C.Muted,
+        BackgroundColor3 = C.Card,
+        BackgroundTransparency = 1,
+        AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 0, 34),
+        LayoutOrder = #tabs + 1,
+    }, side)
+    corner(btn, 8)
+
+    local bar = new("Frame", {
+        Size = UDim2.fromOffset(3, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.fromScale(0, 0.5),
+        BackgroundColor3 = C.Accent,
+        BorderSizePixel = 0,
+    }, btn)
+    corner(bar, 2)
+
+    local page = new("ScrollingFrame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        ScrollBarImageColor3 = C.Accent,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        Visible = false,
+    }, content)
+    new("UIListLayout", { Padding = UDim.new(0, 10), SortOrder = Enum.SortOrder.LayoutOrder }, page)
+    new("UIPadding", {
+        PaddingTop = UDim.new(0, 12),
+        PaddingLeft = UDim.new(0, 12),
+        PaddingRight = UDim.new(0, 14),
+        PaddingBottom = UDim.new(0, 12),
+    }, page)
+
+    local tab = { Button = btn, Bar = bar, Page = page }
+    table.insert(tabs, tab)
+    bind(btn.MouseButton1Click, function() selectTab(tab) end)
+    return page, tab
+end
+
+---------------- ABA: HITBOX ----------------
+local hitboxPage, hitboxTab = addTab("Hitbox")
+
+local COLLAPSED, EXPANDED = 62, 156
+
+local card = new("Frame", {
+    Size = UDim2.new(1, 0, 0, COLLAPSED),
+    BackgroundColor3 = C.Card,
+    BorderSizePixel = 0,
+    ClipsDescendants = true,
+}, hitboxPage)
+corner(card, 10)
+
+new("TextLabel", {
+    Text = "Hitbox",
+    Font = Enum.Font.GothamBold,
+    TextSize = 15,
+    TextColor3 = C.Text,
+    BackgroundTransparency = 1,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(14, 10),
+    Size = UDim2.new(1, -90, 0, 20),
+}, card)
+
+new("TextLabel", {
+    Text = "Aumenta a hitbox dos inimigos",
+    Font = Enum.Font.Gotham,
+    TextSize = 12,
+    TextColor3 = C.Muted,
+    BackgroundTransparency = 1,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(14, 32),
+    Size = UDim2.new(1, -90, 0, 18),
+}, card)
+
+-- Botao ativar
+local switch = new("TextButton", {
+    Text = "",
+    AutoButtonColor = false,
+    BackgroundColor3 = C.Off,
+    AnchorPoint = Vector2.new(1, 0),
+    Position = UDim2.new(1, -14, 0, 19),
+    Size = UDim2.fromOffset(46, 24),
+}, card)
+corner(switch, 12)
+
+local knob = new("Frame", {
+    Size = UDim2.fromOffset(18, 18),
+    AnchorPoint = Vector2.new(0, 0.5),
+    Position = UDim2.new(0, 3, 0.5, 0),
+    BackgroundColor3 = Color3.new(1, 1, 1),
+    BorderSizePixel = 0,
+}, switch)
+corner(knob, 9)
+
+-- Area do slider (aparece ao ativar)
+local sliderArea = new("Frame", {
+    Position = UDim2.fromOffset(0, COLLAPSED),
+    Size = UDim2.new(1, 0, 0, EXPANDED - COLLAPSED),
+    BackgroundTransparency = 1,
+}, card)
+
+new("TextLabel", {
+    Text = "Alcance da hitbox",
+    Font = Enum.Font.GothamMedium,
+    TextSize = 12,
+    TextColor3 = C.Text,
+    BackgroundTransparency = 1,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(14, 0),
+    Size = UDim2.new(0.6, 0, 0, 18),
+}, sliderArea)
+
+local valueLabel = new("TextLabel", {
+    Text = "0",
+    Font = Enum.Font.GothamBold,
+    TextSize = 14,
+    TextColor3 = C.Accent,
+    BackgroundTransparency = 1,
+    TextXAlignment = Enum.TextXAlignment.Right,
+    AnchorPoint = Vector2.new(1, 0),
+    Position = UDim2.new(1, -14, 0, 0),
+    Size = UDim2.fromOffset(60, 18),
+}, sliderArea)
+
+local hit = new("Frame", {
+    Position = UDim2.fromOffset(14, 24),
+    Size = UDim2.new(1, -28, 0, 26),
+    BackgroundTransparency = 1,
+    Active = true,
+}, sliderArea)
+
+local track = new("Frame", {
+    AnchorPoint = Vector2.new(0, 0.5),
+    Position = UDim2.fromScale(0, 0.5),
+    Size = UDim2.new(1, 0, 0, 8),
+    BackgroundColor3 = C.Off,
+    BorderSizePixel = 0,
+}, hit)
+corner(track, 4)
+
+local fill = new("Frame", {
+    Size = UDim2.fromScale(0, 1),
+    BackgroundColor3 = Color3.new(1, 1, 1),
+    BorderSizePixel = 0,
+}, track)
+corner(fill, 4)
+new("UIGradient", { Color = ColorSequence.new(C.Accent, C.Accent2) }, fill)
+
+local sKnob = new("Frame", {
+    AnchorPoint = Vector2.new(0.5, 0.5),
+    Position = UDim2.fromScale(0, 0.5),
+    Size = UDim2.fromOffset(18, 18),
+    BackgroundColor3 = Color3.new(1, 1, 1),
+    BorderSizePixel = 0,
+    ZIndex = 2,
+}, track)
+corner(sKnob, 9)
+
+new("TextLabel", {
+    Text = "0 = distancia normal | 100 = maxima",
+    Font = Enum.Font.Gotham,
+    TextSize = 11,
+    TextColor3 = C.Muted,
+    BackgroundTransparency = 1,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(14, 54),
+    Size = UDim2.new(1, -28, 0, 16),
+}, sliderArea)
+
+local status = new("TextLabel", {
+    Text = "CombatClient: ...",
+    Font = Enum.Font.GothamMedium,
+    TextSize = 11,
+    TextColor3 = C.Muted,
+    BackgroundTransparency = 1,
+    TextXAlignment = Enum.TextXAlignment.Left,
+    Position = UDim2.fromOffset(14, 72),
+    Size = UDim2.new(0.6, 0, 0, 16),
+}, sliderArea)
+
+local inspectBtn = new("TextButton", {
+    Text = "Inspecionar",
+    Font = Enum.Font.GothamBold,
+    TextSize = 11,
+    TextColor3 = C.Text,
+    BackgroundColor3 = C.Off,
+    AutoButtonColor = false,
+    AnchorPoint = Vector2.new(1, 0),
+    Position = UDim2.new(1, -14, 0, 70),
+    Size = UDim2.fromOffset(84, 20),
+}, sliderArea)
+corner(inspectBtn, 6)
+hover(inspectBtn, C.Off, C.Accent)
+bind(inspectBtn.MouseButton1Click, inspectCombatClient)
+
+-- Slider (mouse e toque)
+local draggingSlider = false
+
+local function setValue(v)
+    v = math.clamp(math.floor(v + 0.5), 0, 100)
+    Hitbox.Value = v
+    valueLabel.Text = tostring(v)
+    local a = v / 100
+    tween(fill, 0.12, { Size = UDim2.fromScale(a, 1) })
+    tween(sKnob, 0.12, { Position = UDim2.fromScale(a, 0.5) })
+    if v == 0 then restoreAll() end
+end
+
+local function fromInput(input)
+    local rel = (input.Position.X - hit.AbsolutePosition.X) / hit.AbsoluteSize.X
+    setValue(rel * 100)
+end
+
+bind(hit.InputBegan, function(input)
+    if isPress(input) then
+        draggingSlider = true
+        fromInput(input)
+        tween(sKnob, 0.15, { Size = UDim2.fromOffset(23, 23) }, Enum.EasingStyle.Back)
+    end
+end)
+bind(UserInputService.InputChanged, function(input)
+    if draggingSlider and isMove(input) then
+        fromInput(input)
+    end
+end)
+bind(UserInputService.InputEnded, function(input)
+    if isPress(input) and draggingSlider then
+        draggingSlider = false
+        tween(sKnob, 0.15, { Size = UDim2.fromOffset(18, 18) })
+    end
+end)
+
+-- Ativar / desativar
+local function setEnabled(state)
+    Hitbox.Enabled = state
+    tween(switch, 0.25, { BackgroundColor3 = state and C.Accent or C.Off })
+    tween(knob, 0.3, {
+        Position = state and UDim2.new(1, -21, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+    }, Enum.EasingStyle.Back)
+    tween(card, 0.45, { Size = UDim2.new(1, 0, 0, state and EXPANDED or COLLAPSED) })
+    if not state then restoreAll() end
+end
+
+bind(switch.MouseButton1Click, function()
+    setEnabled(not Hitbox.Enabled)
+end)
+
+-- Status do CombatClient
+task.spawn(function()
+    while gui.Parent do
+        local found = getCombatClient() ~= nil
+        status.Text = found and "CombatClient: encontrado" or "CombatClient: nao encontrado"
+        status.TextColor3 = found and C.Good or C.Bad
+        task.wait(1)
+    end
+end)
+
+---------------- ABRIR / FECHAR ----------------
+local fab = new("TextButton", {
+    Text = "YK",
+    Font = Enum.Font.GothamBlack,
+    TextSize = 14,
+    TextColor3 = Color3.new(1, 1, 1),
+    BackgroundColor3 = C.Accent,
+    AutoButtonColor = false,
+    AnchorPoint = Vector2.new(0, 0.5),
+    Position = UDim2.new(0, 14, 0.5, 0),
+    Size = UDim2.fromOffset(0, 0),
+    Visible = false,
+}, gui)
+corner(fab, 22)
+new("UIStroke", { Color = C.Accent2, Thickness = 1.5 }, fab)
+
+local isOpen = false
+
+local function openWindow()
+    if isOpen then return end
+    isOpen = true
+    main.Visible = true
+    local t1 = tween(fab, 0.2, { Size = UDim2.fromOffset(0, 0) })
+    t1.Completed:Connect(function()
+        if isOpen then fab.Visible = false end
+    end)
+    tween(main, 0.55, { Size = FULL }, Enum.EasingStyle.Back)
+end
+
+local function closeWindow()
+    if not isOpen then return end
+    isOpen = false
+    fab.Visible = true
+    tween(fab, 0.4, { Size = UDim2.fromOffset(44, 44) }, Enum.EasingStyle.Back)
+    local t2 = tween(main, 0.3, { Size = UDim2.fromOffset(0, 0) },
+        Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+    t2.Completed:Connect(function()
+        if not isOpen then main.Visible = false end
+    end)
+end
+
+bind(fab.MouseButton1Click, openWindow)
+bind(btnMin.MouseButton1Click, closeWindow)
+
+bind(UserInputService.InputBegan, function(input, processed)
+    if processed then return end
+    if input.KeyCode == CONFIG.ToggleKey then
+        if isOpen then closeWindow() else openWindow() end
+    end
+end)
+
+---------------- CLEANUP ----------------
+local function cleanup()
+    Hitbox.Enabled = false
+    restoreAll()
+    for _, c in ipairs(connections) do
+        pcall(function() c:Disconnect() end)
+    end
+    if gui then gui:Destroy() end
+end
+ENV.YuriKaiCleanup = cleanup
+
+bind(btnClose.MouseButton1Click, function()
+    Hitbox.Enabled = false
+    restoreAll()
+    isOpen = false
+    local t3 = tween(main, 0.3, { Size = UDim2.fromOffset(0, 0) },
+        Enum.EasingStyle.Back, Enum.EasingDirection.In)
+    t3.Completed:Connect(cleanup)
+end)
+
+---------------- START ----------------
+selectTab(hitboxTab)
+openWindow()
+notify("Hub carregado!")
+
+end)
+
+if not ok then
+    warn("[Yuri Kai] ERRO: " .. tostring(err))
+    notify("Erro: " .. string.sub(tostring(err), 1, 120))
+end
