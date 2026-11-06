@@ -1,4 +1,3 @@
---[[ YURI KAI HUB (Delta) - Hitbox + Invisivel + animacoes ]]
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
